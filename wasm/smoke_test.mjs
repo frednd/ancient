@@ -16,14 +16,14 @@ function withBuffer(bytes, fn) {
   M.HEAPU8.set(bytes, p);
   try { return fn(p); } finally { M._anc_free(p); }
 }
-const scan = (b) => withBuffer(b, (p) => JSON.parse(M.UTF8ToString(M._anc_scan(p, b.length, 0, b.length))));
+const scan = (b) => withBuffer(b, (p) => JSON.parse(M.UTF8ToString(M._anc_scan(p, b.length, 0, b.length, 1))));
 const decompress = (b) => withBuffer(b, (p) => {
   const n = M._anc_decompress(p, b.length, 1);
   return n < 0 ? null : M.HEAPU8.slice(M._anc_out_ptr(), M._anc_out_ptr() + n);
 });
 
 const raw = readFileSync(join(files, 'test_C1.raw'));
-const samples = ['test_C1.pp', 'test_C1.imp', 'test_C1.crm', 'test_C1.rnc1', 'test_C1.grnd', 'test_C1.tpwm', 'test_C1.bz2'];
+const samples = ['test_C1.pp', 'test_C1.imp', 'test_C1.crm', 'test_C1.rnc1', 'test_C1.grnd', 'test_C1.tpwm', 'test_C1.bz2', 'test_C1.byte_1.2', 'test_C1.byte_2.0', 'test_C1.byte_3.0', 'test_C1.bytepro_1.0'];
 let failed = 0;
 const check = (ok, msg) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${msg}`); if (!ok) failed++; };
 

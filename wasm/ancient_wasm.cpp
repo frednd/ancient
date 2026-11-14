@@ -14,6 +14,9 @@
 
 #include <emscripten/emscripten.h>
 
+#include "StoneCrackerDecompressor.hpp"
+
+
 namespace
 {
 
@@ -31,25 +34,81 @@ void appendEscaped(std::string &out,const std::string &s)
 	}
 }
 
+// Formats whose detection is too weak for scanning inside arbitrary data
+// (Unix compressors and raw deflate). They give short false positives, and
+// since most store no packed size they are slow to reject.
+bool isWeakForScan(const std::string &name)
+{
+	static const char *prefixes[]={"C: ","F: ","z: ","Z: ","SCO","Vice:","Vic2:","raw: ","zlib: "};
+	for (auto p:prefixes)
+		if (name.rfind(p,0)==0) return true;
+	return false;
+}
+
+// Headerless ByteKiller is verified by an XOR checksum over the whole packed
+// stream, which the library recomputes at every candidate offset (O(n) each).
+// A prefix-XOR table answers the same question in O(1), so offsets that only
+// headerless ByteKiller could claim, and whose checksum fails, are skipped.
+struct XorIndex
+{
+	const uint8_t *data=nullptr;
+	size_t size=0;
+	std::vector<uint32_t> x; // x[j] = word(j) ^ word(j-4) ^ word(j-8) ...
+
+	static uint32_t word(const uint8_t *d,size_t j) { return (uint32_t(d[j])<<24)|(uint32_t(d[j+1])<<16)|(uint32_t(d[j+2])<<8)|d[j+3]; }
+
+	void build(const uint8_t *d,size_t n)
+	{
+		if (d==data && n==size) return;
+		data=d; size=n;
+		x.assign(n>=4?n-3:0,0);
+		for (size_t j=0;j<x.size();j++) x[j]=word(d,j)^(j>=4?x[j-4]:0);
+	}
+
+	// XOR of the words at s, s+4, ..., e-4 (e-s a multiple of 4).
+	uint32_t range(size_t s,size_t e) const
+	{
+		if (e<=s) return 0;
+		return x[e-4]^(s>=4?x[s-4]:0);
+	}
+
+	// True when the library would only consider headerless ByteKiller at i and it would fail.
+	bool skipHeaderlessByteKiller(size_t i) const
+	{
+		if (i+12>size) return false;
+		uint32_t hdr=word(data,i);
+		if (!hdr || (hdr&3U) || hdr>0x1000000U) return false; // not the headerless shape: let the library decide
+		if ((hdr>>24)!=0) return false;                        // could be a FourCC of another format
+		if (ancient::internal::StoneCrackerDecompressor::detectHeader(hdr,0)) return false;
+		size_t end=i+size_t(hdr)+12U;
+		if (end>size) return true;                             // library rejects this cheaply too
+		return range(i+12,end)!=word(data,i+8);
+	}
+};
+
+XorIndex xorIndex;
+
 }
 
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE void *anc_malloc(size_t size) { return malloc(size?size:1); }
-EMSCRIPTEN_KEEPALIVE void anc_free(void *p) { free(p); }
+EMSCRIPTEN_KEEPALIVE void anc_free(void *p) { if (p==xorIndex.data) xorIndex=XorIndex{}; free(p); }
 
 // Scan data[start..end) for compressed streams. A stream may extend past end
-// (up to size). Returns a pointer to a JSON string:
+// (up to size). flags bit 0: skip weakly detected formats (see isWeakForScan).
+// Returns a pointer to a JSON string:
 //   {"next":<offset to continue from>,"hits":[{"offset":..,"packed":..,"raw":..,"name":".."},...]}
 // The same two-pass check as the CLI 'scan' command keeps false positives low.
-EMSCRIPTEN_KEEPALIVE const char *anc_scan(const uint8_t *data,size_t size,size_t start,size_t end)
+EMSCRIPTEN_KEEPALIVE const char *anc_scan(const uint8_t *data,size_t size,size_t start,size_t end,int flags)
 {
 	if (end>size) end=size;
 	std::string hits;
+	xorIndex.build(data,size);
 	size_t i=start;
 	while (i<end)
 	{
-		if (!ancient::Decompressor::detect(data+i,size-i))
+		if (xorIndex.skipHeaderlessByteKiller(i) || !ancient::Decompressor::detect(data+i,size-i))
 		{
 			i++;
 			continue;
@@ -57,6 +116,11 @@ EMSCRIPTEN_KEEPALIVE const char *anc_scan(const uint8_t *data,size_t size,size_t
 		try
 		{
 			ancient::Decompressor d1{data+i,size-i,false,true};
+			if ((flags&1) && isWeakForScan(d1.getName()))
+			{
+				i++;
+				continue;
+			}
 			if (!d1.getPackedSize()) d1.decompress(true);
 			size_t packed=d1.getPackedSize().value();
 			ancient::Decompressor d2{data+i,packed,true,true};

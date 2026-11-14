@@ -13,7 +13,7 @@ All take pointers into the module heap (`_anc_malloc` / `_anc_free`).
 
 | Function | Purpose |
 |---|---|
-| `anc_scan(data, size, start, end)` | Scan offsets `start..end` for compressed streams. Returns a JSON string `{"next":n,"hits":[{"offset","packed","raw","name"}]}`. Same two-pass verification as the CLI `scan` command. Call it in chunks to report progress. |
+| `anc_scan(data, size, start, end, flags)` | Scan offsets `start..end` for compressed streams. `flags` bit 0 skips weakly detected Unix formats (Compact, Freeze, Pack, Compress, raw Deflate), which give false positives inside other data and are slow to reject. Returns a JSON string `{"next":n,"hits":[{"offset","packed","raw","name"}]}`. Same two-pass verification as the CLI `scan` command. Call it in chunks to report progress. |
 | `anc_try_exact(data, len)` | Decompress and verify `data[0..len)` as one complete stream. Returns the raw size or -1. Used to find the end of formats that keep their header at the end (PowerPacker). |
 | `anc_decompress(data, size, exactSizeKnown)` | Decompress one stream; result at `anc_out_ptr()`, name at `anc_name()`. Returns size or -1. |
 | `anc_identify(data, size)` | Name, packed and raw size as JSON, or `null`. |
